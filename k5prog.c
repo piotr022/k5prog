@@ -1,8 +1,8 @@
-/* Quansheng UV-K5 EEPROM programmer v0.4 
+/* Quansheng UV-K5 EEPROM programmer v0.4
  * (c) 2023 Jacek Lipkowski <sq5bpf@lipkowski.org>
  *
- * This program can read and write the eeprom of Quansheng UVK5 Mark II 
- * and probably other similar radios via the serial port. 
+ * This program can read and write the eeprom of Quansheng UVK5 Mark II
+ * and probably other similar radios via the serial port.
  *
  * It can read/write arbitrary data, and might be useful for reverse
  * engineering the radio configuration.
@@ -11,11 +11,11 @@
  * permanently breaking your radio. The flash image is an unencrypted
  * image, without the version inserted at 0x2000.
  *
- * Use at your own risk. 
+ * Use at your own risk.
  *
  *
  * This program is licensed under the GNU GENERAL PUBLIC LICENSE v3
- * License text avaliable at: http://www.gnu.org/copyleft/gpl.html 
+ * License text avaliable at: http://www.gnu.org/copyleft/gpl.html
  */
 
 /*
@@ -38,6 +38,7 @@
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <sys/select.h>
+#include <termios.h>
 #include <fcntl.h>
 #include <string.h>
 #include <errno.h>
@@ -66,13 +67,13 @@
 #define UVK5_EEPROM_BLOCKSIZE 0x80
 #define UVK5_PREPARE_TRIES 10
 
-/* actually the flash is bigger, but there is a bootloader at 0xf000 that we don't want to overwrite 
+/* actually the flash is bigger, but there is a bootloader at 0xf000 that we don't want to overwrite
  * if you're really brave, then you can modify the code by changing UVK5_MAX_FLASH_SIZE to 0x10000
  * and probably flash the bootloader too, but i would really advise against doing this
  *
  * maybe at some point i will make a command line flag for this
  */
-#define UVK5_MAX_FLASH_SIZE 0xf000 
+#define UVK5_MAX_FLASH_SIZE 0xf000
 #define UVK5_FLASH_BLOCKSIZE 0x100
 
 #define DEFAULT_SERIAL_PORT "/dev/ttyUSB0"
@@ -80,17 +81,17 @@
 #define DEFAULT_FLASH_NAME "k5_flash.raw"
 
 /* globals */
-speed_t ser_speed=B38400;
-char *ser_port=DEFAULT_SERIAL_PORT;
-int verbose=0;
-int mode=MODE_NONE;
-char *file=DEFAULT_FILE_NAME;
-char *flash_file=DEFAULT_FLASH_NAME;
+static speed_t ser_speed=B38400;
+static char *ser_port=DEFAULT_SERIAL_PORT;
+static int verbose=0;
+static int mode=MODE_NONE;
+static char *file=DEFAULT_FILE_NAME;
+static char *flash_file=DEFAULT_FLASH_NAME;
 
-int write_offset=0;
-int write_length=-1;
+static int write_offset=0;
+static int write_length=-1;
 
-int i_know_what_im_doing=0; /* flag the user sets to confirm that he thinks he knows what he's doing */
+static int i_know_what_im_doing=0; /* flag the user sets to confirm that he thinks he knows what he's doing */
 
 struct k5_command {
 	unsigned char *cmd;
@@ -101,7 +102,7 @@ struct k5_command {
 };
 
 /**** commands ********/
-unsigned char uvk5_hello2[]={0x14, 0x05, 0x04, 0x00, 0x9f, 0x25, 0x5a, 0x64}; 
+//unsigned char uvk5_hello2[]={0x14, 0x05, 0x04, 0x00, 0x9f, 0x25, 0x5a, 0x64};
 
 /* commands:
  * 0x14 - hello
@@ -117,28 +118,28 @@ unsigned char uvk5_hello2[]={0x14, 0x05, 0x04, 0x00, 0x9f, 0x25, 0x5a, 0x64};
  *
  * from the radio:
  * 0x18 - broadcast from the radio when flash mode is enabled
- * 
+ *
  *
  */
 
 /* the last 6 bytes have to be the same for each "session" */
-unsigned char uvk5_hello[]={ 0x14,  0x5,  0x4,  0x0,  0x6a,  0x39,  0x57,  0x64 };
-unsigned char uvk5_readmem1[]={ 0x1b,  0x5,  0x8,  0x0,  0x80,  0xe,  0x80,  0x0,  0x6a,  0x39,  0x57,  0x64 }; /* byte6 - length (max 0x80), byte 4 (lsb) ,5 (msb)  address */
-unsigned char uvk5_writemem1[]={ 0x1d, 0x5, 0x18, 0x0, 0x50, 0xf, 0x10, 0x0, 0x14, 0xad, 0x5c, 0x64, 0x43, 0x48, 0x30, 0x30, 0x31, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0 }; /* byte3 - command length, byte6 - data to be written length, byte4 - (lsb) byte5( msb) address, byte12-end data */
+static const unsigned char uvk5_hello[]={ 0x14,  0x5,  0x4,  0x0,  0x6a,  0x39,  0x57,  0x64 };
+static const unsigned char uvk5_readmem1[]={ 0x1b,  0x5,  0x8,  0x0,  0x80,  0xe,  0x80,  0x0,  0x6a,  0x39,  0x57,  0x64 }; /* byte6 - length (max 0x80), byte 4 (lsb) ,5 (msb)  address */
+//static const unsigned char uvk5_writemem1[]={ 0x1d, 0x5, 0x18, 0x0, 0x50, 0xf, 0x10, 0x0, 0x14, 0xad, 0x5c, 0x64, 0x43, 0x48, 0x30, 0x30, 0x31, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0 }; /* byte3 - command length, byte6 - data to be written length, byte4 - (lsb) byte5( msb) address, byte12-end data */
 
-unsigned char uvk5_reset[]={ 0xdd,  0x5,  0x0,  0x0 };
+static const unsigned char uvk5_reset[]={ 0xdd,  0x5,  0x0,  0x0 };
 
 /* terrible hexdump ripped from some old code, please don't look */
-void hdump(unsigned char *buf,int len)
+static void hdump(const unsigned char *buf,int len)
 {
 	int tmp1;
 	char adump[80];
 	int tmp2=0;
 	int tmp3=0;
 	unsigned char sss;
-	char hexz[]="0123456789abcdef";
+	static const char hexz[]="0123456789abcdef";
 
-	int lasttmp;
+	int lasttmp = 0;
 
 	printf("\n0x%6.6x |0 |1 |2 |3 |4 |5 |6 |7 |8 |9 |a |b |c |d |e |f |\n",len);
 	printf("---------+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+------------\n");
@@ -165,7 +166,7 @@ void hdump(unsigned char *buf,int len)
 	if (lasttmp!=tmp1) printf("0x%6.6x: %.69s\n",tmp3,adump);
 }
 
-int openport(char *port,speed_t speed)
+static int openport(char *port,speed_t speed)
 {
 	int fd;
 	struct termios my_termios;
@@ -206,7 +207,7 @@ int openport(char *port,speed_t speed)
 }
 
 /* read with timeout */
-int read_timeout(int fd, unsigned char *buf, int maxlen, int timeout)
+static int read_timeout(int fd, unsigned char *buf, int maxlen, int timeout)
 {
 	fd_set rfd;
 	int len=0;
@@ -231,7 +232,7 @@ int read_timeout(int fd, unsigned char *buf, int maxlen, int timeout)
 			buf=buf+nr;
 			if (nr>=0) maxlen=maxlen-nr;
 			if (maxlen==0) break;
-		} 
+		}
 
 
 		if (ret==0)  {
@@ -251,7 +252,7 @@ int read_timeout(int fd, unsigned char *buf, int maxlen, int timeout)
 
 
 
-void destroy_k5_struct(struct k5_command *cmd)
+static void destroy_k5_struct(struct k5_command *cmd)
 {
 	if (cmd->cmd) { free(cmd->cmd); }
 	if (cmd->obfuscated_cmd) { free(cmd->obfuscated_cmd); }
@@ -259,7 +260,7 @@ void destroy_k5_struct(struct k5_command *cmd)
 }
 
 /* ripped from https://mdfs.net/Info/Comp/Comms/CRC16.htm */
-uint16_t crc16xmodem(char *addr, int num, int crc)
+static uint16_t crc16xmodem(unsigned char *addr, int num, int crc)
 {
 #define poly 0x1021
 	int i;
@@ -281,10 +282,10 @@ uint16_t crc16xmodem(char *addr, int num, int crc)
 
 
 /* (de)obfuscate the string using xor */
-void xorarr(unsigned char *inarr,int len)
+static void xorarr(unsigned char *inarr,int len)
 {
 	int len2=0;
-	unsigned char k5_xor_array[16]= { 
+	unsigned char k5_xor_array[16]= {
 		0x16 , 0x6c , 0x14 , 0xe6 , 0x2e , 0x91 , 0x0d , 0x40 ,
 		0x21 , 0x35 , 0xd5 , 0x40 , 0x13 , 0x03 , 0xe9 , 0x80 };
 
@@ -296,7 +297,7 @@ void xorarr(unsigned char *inarr,int len)
 }
 
 /* hexdump a k5_command struct */
-void k5_hexdump(struct k5_command *cmd) {
+static void k5_hexdump(struct k5_command *cmd) {
 	printf ("********  k5 command hexdump [obf_len:%i clear_len:%i crc_ok:%i **********\n",cmd->obfuscated_len,cmd->len,cmd->crcok);
 	if (cmd->obfuscated_cmd) {
 		printf("## obfuscated ##\n");
@@ -311,7 +312,7 @@ void k5_hexdump(struct k5_command *cmd) {
 
 
 /* obfuscate a k5 datagram */
-int k5_obfuscate(struct k5_command *cmd)
+static int k5_obfuscate(struct k5_command *cmd)
 {
 	uint16_t c;
 	if (!cmd->cmd) return(0);
@@ -334,23 +335,23 @@ int k5_obfuscate(struct k5_command *cmd)
 }
 
 /* deobfuscate a k5 datagram and verify it */
-int k5_deobfuscate(struct k5_command *cmd)
+static int k5_deobfuscate(struct k5_command *cmd)
 {
 	uint16_t c,d;
 
 	if (!cmd->obfuscated_cmd) return(0);
 	if (cmd->cmd) { free (cmd->cmd); }
 	/* check the obfuscated datagram */
-	if ((cmd->obfuscated_cmd[0]!=0xab)||(cmd->obfuscated_cmd[1]!=0xcd)) { 
+	if ((cmd->obfuscated_cmd[0]!=0xab)||(cmd->obfuscated_cmd[1]!=0xcd)) {
 		//bad header
 		if (verbose>2)	{ printf("bad header\n"); k5_hexdump(cmd); }
-		return(0); 
-	} 
-	if ((cmd->obfuscated_cmd[cmd->obfuscated_len-2]!=0xdc)||(cmd->obfuscated_cmd[cmd->obfuscated_len-1]!=0xba)) { 
+		return(0);
+	}
+	if ((cmd->obfuscated_cmd[cmd->obfuscated_len-2]!=0xdc)||(cmd->obfuscated_cmd[cmd->obfuscated_len-1]!=0xba)) {
 		//bad footer
 		if (verbose>2)	{ printf("bad footer\n"); k5_hexdump(cmd); }
-		return(0); 
-	} 
+		return(0);
+	}
 	cmd->len=cmd->obfuscated_len-6; /* header  + length + data + crc + footer */
 	cmd->cmd=calloc(cmd->len,1);
 	memcpy(cmd->cmd,cmd->obfuscated_cmd+4,cmd->len);
@@ -367,21 +368,21 @@ int k5_deobfuscate(struct k5_command *cmd)
 		if (d==c) {
 			printf("** the protocol actually uses proper crc on datagrams from the radio, please inform the author of the radio/firmware version\n");
 			k5_hexdump(cmd);
-		} 
+		}
 		cmd->crcok=0;
 		if (verbose>2)	{ printf("bad crc 0x%4.4x (should be 0x%4.4x)\n",d,c); k5_hexdump(cmd); }
 		cmd->len=cmd->len-2; /* skip crc */
-		return(0); 
+		return(0);
 
 	}
 	return(1);
 }
 
 /* obfuscate a command, send it */
-int k5_send_cmd(int fd,struct k5_command *cmd) {
+static int k5_send_cmd(int fd,struct k5_command *cmd) {
 	int l;
 
-	if (!k5_obfuscate(cmd)) { 
+	if (!k5_obfuscate(cmd)) {
 		fprintf(stderr,"obfuscate error!\n");
 		return(0);
 	}
@@ -393,7 +394,7 @@ int k5_send_cmd(int fd,struct k5_command *cmd) {
 	return(1);
 }
 
-int k5_send_buf(int fd,unsigned char *buf,int len) {
+static int k5_send_buf(int fd,const unsigned char *buf,int len) {
 	int l;
 	struct k5_command *cmd;
 
@@ -406,10 +407,9 @@ int k5_send_buf(int fd,unsigned char *buf,int len) {
 	return(l);
 }
 
-/* receive a response, deobfuscate it */
-struct k5_command *k5_receive(int fd,int tmout) {
+/* rec eive a response, deobfuscate it */
+static struct k5_command *k5_receive(int fd,int tmout) {
 	unsigned char buf[4];
-	unsigned char buf2[2048];
 	struct k5_command *cmd;
 	int len;
 
@@ -453,9 +453,8 @@ struct k5_command *k5_receive(int fd,int tmout) {
 /******************************/
 /*  eeprom read/write support */
 /******************************/
-int k5_readmem(int fd, unsigned char *buf, unsigned char maxlen, int offset)
+static int k5_readmem(int fd, unsigned char *buf, unsigned char maxlen, int offset)
 {
-	int l;
 	unsigned char readmem[sizeof(uvk5_readmem1)];
 
 
@@ -484,9 +483,8 @@ int k5_readmem(int fd, unsigned char *buf, unsigned char maxlen, int offset)
 
 }
 
-int k5_writemem(int fd, unsigned char *buf, unsigned char len, int offset)
+static int k5_writemem(int fd, unsigned char *buf, unsigned char len, int offset)
 {
-	int l;
 	unsigned char writemem[512];
 
 
@@ -532,11 +530,9 @@ int k5_writemem(int fd, unsigned char *buf, unsigned char len, int offset)
 }
 
 /* reset the radio */
-int k5_reset(int fd)
+static int k5_reset(int fd)
 {
-	int l;
 	int r;
-	struct k5_command *cmd;
 
 	if (verbose>1) printf("@@@@@@@@@@@@@@@@@@    reset\n");
 	r=k5_send_buf(fd,uvk5_reset,sizeof(uvk5_reset));
@@ -550,11 +546,11 @@ int k5_reset(int fd)
 /******************************/
 
 /* wait for a "i'm in flashing mode" message */
-int wait_flash_message(int fd,int ntimes) {
+static int wait_flash_message(int fd,int ntimes) {
 	struct k5_command *cmd;
 	int ok=0;
 	char buf[17];
-	int i,j;
+	unsigned int i;
 
 	while(ntimes) {
 		ntimes--;
@@ -565,7 +561,7 @@ int wait_flash_message(int fd,int ntimes) {
 
 		if (!cmd) {
 			printf("wait_flash_message: timeout\n");
-			continue; 
+			continue;
 		}
 
 		k5_hexdump(cmd);
@@ -590,12 +586,12 @@ int wait_flash_message(int fd,int ntimes) {
 		/*
 		 * this is what a "i'm in flashing mode" packet looks like
 		 *
-		 * 
+		 *
 		 *  0x000024 |0 |1 |2 |3 |4 |5 |6 |7 |8 |9 |a |b |c |d |e |f |
 		 *  ---------+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+------------
-		 *  0x000000: 18 05 20 00 01 02 02 06 1c 53 50 4a 37 47 ff 0f   .. ......SPJ7G..   
-		 *  0x000010: 8c 00 53 00 32 2e 30 30 2e 30 36 00 34 0a 00 00   ..S.2.00.06.4...   
-		 *  0x000020: 00 00 00 20                                       ...                
+		 *  0x000000: 18 05 20 00 01 02 02 06 1c 53 50 4a 37 47 ff 0f   .. ......SPJ7G..
+		 *  0x000010: 8c 00 53 00 32 2e 30 30 2e 30 36 00 34 0a 00 00   ..S.2.00.06.4...
+		 *  0x000020: 00 00 00 20                                       ...
 		 */
 
 		if ((cmd->cmd[2]!=0x20)||(cmd->cmd[3]!=0x0)||(cmd->cmd[4]!=0x1)||(cmd->cmd[5]!=0x2)||(cmd->cmd[6]!=0x2)) {
@@ -616,7 +612,7 @@ int wait_flash_message(int fd,int ntimes) {
 	}
 
 	for (i=0;i<(sizeof(buf)-1);i++) {
-		j=i+0x14;
+		int j=i+0x14;
 		if (j>=cmd->len) break;
 		if (!isprint(cmd->cmd[j])) break;
 		buf[i]=cmd->cmd[j];
@@ -627,13 +623,13 @@ int wait_flash_message(int fd,int ntimes) {
 	return(1);
 }
 
-/* sends the version of firmware that we will be flashing, 
+/* sends the version of firmware that we will be flashing,
  * unobfuscated firmware will have the version number in 16 bytes at 0x2000
  * probably these bytes are sent.
  *
  * currently this is hardcoded to 2.01.23
  */
-int k5_send_flash_version_message(int fd) {
+static int k5_send_flash_version_message(int fd) {
 
 	int r;
 	struct k5_command *cmd;
@@ -651,7 +647,7 @@ int k5_send_flash_version_message(int fd) {
 	return(1);
 }
 
-int k5_writeflash(int fd, unsigned char *buf, int  len, int offset, int fw_size_blocks)
+static int k5_writeflash(int fd, unsigned char *buf, int  len, int offset, int fw_size_blocks)
 {
 	int l;
 	unsigned char writeflash[512];
@@ -664,14 +660,14 @@ int k5_writeflash(int fd, unsigned char *buf, int  len, int offset, int fw_size_
 	if (verbose>1) printf("@@@@@@@@@@@@@@@@@@     writeflash offset=0x%4.4x len=0x%2.2x\n",offset,len);
 	memset(writeflash,0,sizeof(writeflash));
 
-	/* 0x19  0x5  0xc  0x1  0x8a  0x8d  0x9f  0x1d  
-	 * address_msb  address_lsb  0xe6  0x0  length_msb  length_lsb  0x0  0x0 
+	/* 0x19  0x5  0xc  0x1  0x8a  0x8d  0x9f  0x1d
+	 * address_msb  address_lsb  0xe6  0x0  length_msb  length_lsb  0x0  0x0
 	 * [0x100 bytes of data, if length is <0x100 then fill the rest with zeroes] */
 	writeflash[0]=0x19;
 	writeflash[1]=0x5;
 	/* bytes 2,3: length is 0x10c */
 	writeflash[2]=0xc;
-	writeflash[3]=1; 
+	writeflash[3]=1;
 	writeflash[4]=0x8a;
 	writeflash[5]=0x8d;
 	writeflash[6]=0x9f;
@@ -696,8 +692,8 @@ int k5_writeflash(int fd, unsigned char *buf, int  len, int offset, int fw_size_
 	while(l) {
 		cmd=k5_receive(fd,10000);
 		l--;
-		if (!cmd) { 
-			usleep(1000); 
+		if (!cmd) {
+			usleep(1000);
 			continue;
 		}
 
@@ -721,7 +717,7 @@ int k5_writeflash(int fd, unsigned char *buf, int  len, int offset, int fw_size_
 			destroy_k5_struct(cmd);
 			continue;
 		}
-		ok=1; 
+		ok=1;
 		destroy_k5_struct(cmd);
 		break;
 	}
@@ -734,9 +730,9 @@ int k5_writeflash(int fd, unsigned char *buf, int  len, int offset, int fw_size_
 }
 
 
-void helpme()
+static void helpme()
 {
-	printf( 
+	printf(
 			"cmdline opts:\n"
 			"-f <file>\tfilename that contains the eeprom dump (default: " DEFAULT_FILE_NAME ")\n"
 			"-b <file>\tfilename that contains the raw flash image (default " DEFAULT_FLASH_NAME ")\n"
@@ -800,12 +796,11 @@ static speed_t baud_to_speed_t(int baud)
 
 }
 
-void parse_cmdline(int argc, char **argv)
+static void parse_cmdline(int argc, char **argv)
 {
 	int opt;
-	int tmpval;
 
-int res;
+        int res;
 	/* cmdline opts:
 	 * -f <file>
 	 * -b <flash file>
@@ -905,7 +900,7 @@ int res;
 	}
 }
 
-int write_file(char *name, unsigned char *buffer, int len)
+static int write_file(char *name, unsigned char *buffer, int len)
 {
 	int fd;
 	int l;
@@ -926,7 +921,7 @@ int write_file(char *name, unsigned char *buffer, int len)
 	close(fd);
 	return(1);
 }
-int k5_prepare(int fd) {
+static int k5_prepare(int fd) {
 	int r;
 	struct k5_command *cmd;
 
@@ -950,7 +945,7 @@ int main(int argc,char **argv)
 	int flash_length2;
 	int i,r,j,len;
 
-	printf (VERSION "\n\n"); 
+	printf (VERSION "\n\n");
 
 	parse_cmdline(argc,argv);
 
@@ -1022,8 +1017,8 @@ int main(int argc,char **argv)
 			flash_length2=flash_length;
 			if (write_length>0) {
 				flash_length2=write_offset+write_length;
-				if (flash_length2%UVK5_FLASH_BLOCKSIZE>0) { 
-					flash_length2=flash_length2-flash_length2%UVK5_FLASH_BLOCKSIZE+UVK5_FLASH_BLOCKSIZE; 
+				if (flash_length2%UVK5_FLASH_BLOCKSIZE>0) {
+					flash_length2=flash_length2-flash_length2%UVK5_FLASH_BLOCKSIZE+UVK5_FLASH_BLOCKSIZE;
 				}
 				if (flash_length2>flash_length) flash_length2=flash_length;
 				printf("Writing blocks from address 0x%x until 0x%x\n",write_offset,flash_length2);
@@ -1072,9 +1067,9 @@ int main(int argc,char **argv)
 					fprintf(stderr,"Failed to read block 0x%4.4X\n",i);
 					exit(1);
 				}
-				if (verbose>0) { 
-					printf("\rread block 0x%4.4X  %i%%",i,(100*i/UVK5_EEPROM_SIZE)); 
-					fflush(stdout); 
+				if (verbose>0) {
+					printf("\rread block 0x%4.4X  %i%%",i,(100*i/UVK5_EEPROM_SIZE));
+					fflush(stdout);
 				}
 			}
 			close(fd);
@@ -1117,12 +1112,12 @@ int main(int argc,char **argv)
 						fprintf(stderr,"Failed to write block 0x%4.4X\n",i);
 						exit(1);
 					}
-					if (verbose>0) { 
-						printf("\rwrite block 0x%4.4X  %i%%",i,(100*i/j)); 
-						fflush(stdout); 
+					if (verbose>0) {
+						printf("\rwrite block 0x%4.4X  %i%%",i,(100*i/j));
+						fflush(stdout);
 					}
 
-				} 
+				}
 			} else {
 				/* write to radio */
 
@@ -1137,9 +1132,9 @@ int main(int argc,char **argv)
 						fprintf(stderr,"Failed to write block 0x%4.4X length 0x%2.2x\n",uvk5_writes[i][0],uvk5_writes[i][1]);
 						exit(1);
 					}
-					if (verbose>0) { 
-						printf("\rwrite block 0x%4.4X  %i%%",i,(100*i/j)); 
-						fflush(stdout); 
+					if (verbose>0) {
+						printf("\rwrite block 0x%4.4X  %i%%",i,(100*i/j));
+						fflush(stdout);
 					}
 					i++;
 				}
