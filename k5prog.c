@@ -715,7 +715,7 @@ static int k5_writeflash(int fd, unsigned char *buf, int  len, int offset, int f
 		if (((cmd->cmd[0])!=0x1a)||((cmd->cmd[8])!=writeflash[8])||((cmd->cmd[9])!=writeflash[9])) {
 			fprintf(stderr,"bad write confirmation\n");
 			destroy_k5_struct(cmd);
-			continue;
+			break;
 		}
 		ok=1;
 		destroy_k5_struct(cmd);
