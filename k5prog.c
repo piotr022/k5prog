@@ -1000,7 +1000,7 @@ int main(int argc,char **argv)
 			}
 			flash_length=read(ffd,(unsigned char *)&flash,UVK5_MAX_FLASH_SIZE);
 			/* arbitrary limit do that someone doesn't flash some random short file */
-			if (flash_length<50000) {
+			if (flash_length<40000) {
 				fprintf(stderr,"Failed to read whole eeprom from file %s (read %i), file too short or some other error\n",file,flash_length);
 				exit(1);
 			}
