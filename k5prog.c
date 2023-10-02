@@ -300,6 +300,24 @@ static void xorarr(unsigned char *inarr,int len)
 	}
 }
 
+static void print_received_command(const struct k5_command* cmd)
+{
+    const char* str;
+    switch(cmd->cmd[0]) {
+        case 0x18: str = "Bootloader loop message"; break;
+        case 0x19: str = "Write flash command"; break;
+        case 0x1a: str = "Write flash reply"; break;
+        case 0x1b: str = "EEPROM read command"; break;
+        case 0x1c: str = "EEPROM read reply"; break;
+        case 0x1d: str = "EEPROM write command"; break;
+        case 0x1e: str = "EEPROM write reply"; break;
+        case 0x30: str = "Exit bootloader loop mode"; break;
+        default: str = "Unknown!!"; break;
+    }
+
+    printf("OPC: 0x%x => %s\n", cmd->cmd[0], str);
+}
+
 /* hexdump a k5_command struct */
 static void k5_hexdump(struct k5_command *cmd) {
 	printf ("********  k5 command hexdump [obf_len:%i clear_len:%i crc_ok:%i **********\n",cmd->obfuscated_len,cmd->len,cmd->crcok);
@@ -309,6 +327,7 @@ static void k5_hexdump(struct k5_command *cmd) {
 	}
 	if (cmd->cmd) {
 		printf("## cleartext ##\n");
+                print_received_command(cmd);
 		hdump(cmd->cmd,cmd->len);
 	}
 	printf("*****************\n");
