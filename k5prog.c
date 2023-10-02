@@ -97,6 +97,8 @@ static int write_length=-1;
 
 static int i_know_what_im_doing=0; /* flag the user sets to confirm that he thinks he knows what he's doing */
 
+static char flash_version = '2';
+
 struct k5_command {
 	unsigned char *cmd;
 	int len;
@@ -642,6 +644,7 @@ static int wait_flash_message(int fd,int ntimes) {
 	}
 	buf[i]=0;
 	printf("Flasher version is: [%s]\n",buf);
+        flash_version = buf[0];
 	destroy_k5_struct(cmd);
 	return(1);
 }
@@ -650,14 +653,25 @@ static int wait_flash_message(int fd,int ntimes) {
  * unobfuscated firmware will have the version number in 16 bytes at 0x2000
  * probably these bytes are sent.
  *
- * currently this is hardcoded to 2.01.23
+ * currently this is hardcoded to 2.01.23 for v2
+ *
+ * If the version does not match it will not work!
+ * Atleast v4 will not accept 2.01.23, but will work if 4.00.01 is send.
  */
-static int k5_send_flash_version_message(int fd) {
+static int k5_send_flash_version_message(int fd, char bootloader_version) {
 
 	int r;
 	struct k5_command *cmd;
-	unsigned char uvk5_flash_version[]={ 0x30, 0x5, 0x10, 0x0, '2', '.', '0', '1', '.', '2', '3', 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0};
-	r=k5_send_buf(fd,uvk5_flash_version,sizeof(uvk5_flash_version));
+	static const unsigned char uvk5_flash_version_v2[20]={ 0x30, 0x5, 0x10, 0x0, '2', '.', '0', '1', '.', '2', '3', 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0};
+	static const unsigned char uvk5_flash_version_v4[20]={ 0x30, 0x5, 0x10, 0x0, '4', '.', '0', '0', '.', '0', '1', 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0};
+        const unsigned char* uvk5_flash_version;
+        switch(bootloader_version) {
+            default: /* Keep default v2 is version is unknown */
+            case '2': uvk5_flash_version = uvk5_flash_version_v2; break;
+            /* TODO add something for version 3 */
+            case '4': uvk5_flash_version = uvk5_flash_version_v4; break;
+        }
+	r=k5_send_buf(fd,uvk5_flash_version,sizeof(uvk5_flash_version_v2));
 	if (!r) return(0);
 
 	/* check if we're still getting packets, usually this is a 0x18 type packet, but not sure what else the radio can send  */
@@ -1034,7 +1048,7 @@ int main(int argc,char **argv)
 			r=wait_flash_message(fd,10000);
 			if (!r) exit(0);
 
-			k5_send_flash_version_message(fd);
+			k5_send_flash_version_message(fd, flash_version);
 
 			/* for(i=0; i<flash_length; i+=UVK5_FLASH_BLOCKSIZE) */
 			flash_length2=flash_length;
